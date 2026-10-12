@@ -3,7 +3,7 @@ package com.fallguy1322.game3d;
 import com.badlogic.gdx.ApplicationAdapter;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
-import com.badlogic.gdx.InputProcessor;
+import com.badlogic.gdx.InputAdapter;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.PerspectiveCamera;
@@ -17,9 +17,8 @@ import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
 import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
 import com.badlogic.gdx.math.Vector3;
-import com.badlogic.gdx.InputAdapter;
-import java.util.ArrayList;
-import java.util.List;
+
+import android.view.KeyEvent;
 
 public class Game3D extends ApplicationAdapter {
     private PerspectiveCamera camera;
@@ -29,12 +28,17 @@ public class Game3D extends ApplicationAdapter {
     private Model playerModel;
     private ModelInstance ground;
     private ModelInstance player;
+
     private final Vector3 playerPosition = new Vector3(0, 0.6f, 0);
     private final Vector3 cameraTarget = new Vector3();
     private float verticalVelocity = 0f;
     private boolean grounded = true;
-    private boolean up, down, left, right;
+
+    // Volatile because Android dispatches controller events on the UI thread.
+    private volatile boolean up, down, left, right;
+    private volatile float stickX, stickY;
     private final float moveSpeed = 4.0f;
+    private static final float DEAD_ZONE = 0.18f;
 
     @Override
     public void create() {
@@ -60,41 +64,82 @@ public class Game3D extends ApplicationAdapter {
         player = new ModelInstance(playerModel);
         player.transform.setToTranslation(playerPosition);
 
+        // Keyboard and TV remote fallback, alongside native PS3 gamepad events.
         Gdx.input.setInputProcessor(new InputAdapter() {
             @Override
             public boolean keyDown(int keycode) {
-                setKey(keycode, true);
-                if ((keycode == Input.Keys.ENTER || keycode == Input.Keys.SPACE || keycode == Input.Keys.CENTER) && grounded) {
-                    verticalVelocity = 7f;
-                    grounded = false;
+                setLibGdxKey(keycode, true);
+                if ((keycode == Input.Keys.ENTER || keycode == Input.Keys.SPACE
+                        || keycode == Input.Keys.CENTER) && grounded) {
+                    jump();
                 }
                 return true;
             }
 
             @Override
             public boolean keyUp(int keycode) {
-                setKey(keycode, false);
+                setLibGdxKey(keycode, false);
                 return true;
             }
-
-            private void setKey(int keycode, boolean value) {
-                if (keycode == Input.Keys.UP || keycode == Input.Keys.W) up = value;
-                if (keycode == Input.Keys.DOWN || keycode == Input.Keys.S) down = value;
-                if (keycode == Input.Keys.LEFT || keycode == Input.Keys.A) left = value;
-                if (keycode == Input.Keys.RIGHT || keycode == Input.Keys.D) right = value;
-            }
         });
+    }
+
+    private void setLibGdxKey(int keycode, boolean pressed) {
+        if (keycode == Input.Keys.UP || keycode == Input.Keys.W) up = pressed;
+        if (keycode == Input.Keys.DOWN || keycode == Input.Keys.S) down = pressed;
+        if (keycode == Input.Keys.LEFT || keycode == Input.Keys.A) left = pressed;
+        if (keycode == Input.Keys.RIGHT || keycode == Input.Keys.D) right = pressed;
+    }
+
+    public void setGamepadAxes(float x, float y) {
+        stickX = Math.abs(x) < DEAD_ZONE ? 0f : x;
+        stickY = Math.abs(y) < DEAD_ZONE ? 0f : y;
+    }
+
+    public void handleAndroidKey(int keyCode, boolean pressed) {
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_DPAD_UP: up = pressed; break;
+            case KeyEvent.KEYCODE_DPAD_DOWN: down = pressed; break;
+            case KeyEvent.KEYCODE_DPAD_LEFT: left = pressed; break;
+            case KeyEvent.KEYCODE_DPAD_RIGHT: right = pressed; break;
+            case KeyEvent.KEYCODE_BUTTON_A:
+            case KeyEvent.KEYCODE_BUTTON_1:
+            case KeyEvent.KEYCODE_ENTER:
+            case KeyEvent.KEYCODE_SPACE:
+                if (pressed) jump();
+                break;
+            case KeyEvent.KEYCODE_BUTTON_B:
+                // Circle/B is a convenient alternative jump button.
+                if (pressed) jump();
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void jump() {
+        if (grounded) {
+            verticalVelocity = 7f;
+            grounded = false;
+        }
     }
 
     @Override
     public void render() {
         float delta = Math.min(Gdx.graphics.getDeltaTime(), 0.05f);
-        float dx = (right ? 1f : 0f) - (left ? 1f : 0f);
-        float dz = (down ? 1f : 0f) - (up ? 1f : 0f);
+        float dx = (right ? 1f : 0f) - (left ? 1f : 0f) + stickX;
+        float dz = (down ? 1f : 0f) - (up ? 1f : 0f) + stickY;
+        dx = Math.max(-1f, Math.min(1f, dx));
+        dz = Math.max(-1f, Math.min(1f, dz));
+
         if (dx != 0 || dz != 0) {
             float length = (float)Math.sqrt(dx * dx + dz * dz);
-            playerPosition.x += dx / length * moveSpeed * delta;
-            playerPosition.z += dz / length * moveSpeed * delta;
+            if (length > 1f) {
+                dx /= length;
+                dz /= length;
+            }
+            playerPosition.x += dx * moveSpeed * delta;
+            playerPosition.z += dz * moveSpeed * delta;
         }
 
         if (!grounded) {
